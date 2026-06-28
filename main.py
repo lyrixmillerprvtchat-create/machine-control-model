@@ -66,7 +66,7 @@ def setup():
 # Core query runner
 # ---------------------------------------------------------------------------
 
-def run_query(model, query: str, registry=None, ask_correction: bool = True) -> None:
+def run_query(model, query: str, registry=None) -> None:
     from executor import execute
     import corrections
     import memory
@@ -105,13 +105,9 @@ def run_query(model, query: str, registry=None, ask_correction: bool = True) -> 
 
         approved = execute(prediction, registry=registry)
 
-        # 5. Track usage for auto-learning after every approval
+        # Track usage for auto-learning after every approval
         if approved:
             memory.track_usage(intent, prediction.get("params", {}))
-
-        # 6. Correction prompt (REPL only)
-        if ask_correction:
-            corrections.prompt_correction(step, intent)
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +345,7 @@ def repl(model, registry=None):
             else:
                 last_prediction = model.predict(query)
 
-        run_query(model, query, registry=registry, ask_correction=True)
+        run_query(model, query, registry=registry)
 
 
 # ---------------------------------------------------------------------------
@@ -385,7 +381,7 @@ def main():
 
     if args:
         query = " ".join(args)
-        run_query(model, query, registry=registry, ask_correction=False)
+        run_query(model, query, registry=registry)
     else:
         repl(model, registry)
 
