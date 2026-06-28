@@ -70,6 +70,10 @@ def run_query(model, query: str, registry=None, ask_correction: bool = True) -> 
     from executor import execute
     import corrections
     import memory
+    import chat as chat_module
+
+    # Confidence threshold below which we fall back to chat
+    CHAT_FALLBACK_THRESHOLD = 0.40
 
     steps = parse_chain(query)
     if len(steps) > 1:
@@ -90,15 +94,24 @@ def run_query(model, query: str, registry=None, ask_correction: bool = True) -> 
             # 3. Fill any missing params from learned preferences
             prediction = memory.fill_defaults(prediction)
 
+        intent = prediction.get("intent")
+        confidence = prediction.get("confidence", 1.0)
+
+        # 4. Route to chat if: intent is chat, OR confidence is too low to act on
+        if intent == "chat" or confidence < CHAT_FALLBACK_THRESHOLD:
+            chat_module.chat(step)
+            # No correction prompt for chat — it's conversational
+            continue
+
         approved = execute(prediction, registry=registry)
 
-        # 4. Track usage for auto-learning after every approval
+        # 5. Track usage for auto-learning after every approval
         if approved:
-            memory.track_usage(prediction["intent"], prediction.get("params", {}))
+            memory.track_usage(intent, prediction.get("params", {}))
 
-        # 5. Correction prompt (REPL only)
+        # 6. Correction prompt (REPL only)
         if ask_correction:
-            corrections.prompt_correction(step, prediction["intent"])
+            corrections.prompt_correction(step, intent)
 
 
 # ---------------------------------------------------------------------------
@@ -147,11 +160,20 @@ def _handle_forget(text: str) -> bool:
 
 def repl(model, registry=None):
     import memory
+    import chat as chat_module
 
     print(_c(BANNER, "cyan"))
 
     mem_summary = memory.summary()
     print(_c(f"  Memory loaded: {mem_summary}", "yellow"))
+
+    if chat_module.is_available():
+        active_model = chat_module.best_available_model()
+        hist_summary = chat_module.history_summary()
+        print(_c(f"  Chat online:   {active_model}  |  {hist_summary}", "green"))
+    else:
+        print(_c("  Chat offline:  Ollama not running (type 'chat setup' for instructions)", "red"))
+
     print(_c("  Type in plain English. Chain steps with 'then'. Type 'help' for commands.\n", "bold"))
 
     last_prediction: dict = {}
@@ -186,6 +208,10 @@ def repl(model, registry=None):
             print("    remember Y = <note>      save a free-text note")
             print("    forget Y                 delete alias or note Y")
             print("    recall Y                 look up what Y means")
+            print("    clear history            wipe conversation history")
+            print("    chat model <name>        switch local chat model")
+            print("    chat models              list installed Ollama models")
+            print("    chat setup               show Ollama install instructions")
             print("    exit / quit              exit\n")
             continue
 
@@ -275,6 +301,33 @@ def repl(model, registry=None):
             import corrections as corr
             corr.apply_and_retrain()
             model = require_model()
+            continue
+
+        if low == "clear history":
+            chat_module.clear_history()
+            continue
+
+        if low == "chat setup":
+            print(chat_module.INSTALL_GUIDE)
+            continue
+
+        if low == "chat models":
+            models = chat_module.list_models()
+            if models:
+                current = chat_module.get_model()
+                print(_c(f"\n  Installed Ollama models:", "cyan"))
+                for m in models:
+                    marker = " <-- active" if m.startswith(current.split(":")[0]) else ""
+                    print(f"    {m}{marker}")
+            else:
+                print(_c("  No models found. Is Ollama running?", "yellow"))
+            print()
+            continue
+
+        if low.startswith("chat model "):
+            name = query[11:].strip()
+            chat_module.set_model(name)
+            print(_c(f"  [Chat] Model set to '{name}'", "green"))
             continue
 
         # ── memory shortcut commands ───────────────────────────────────────

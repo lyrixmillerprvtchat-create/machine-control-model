@@ -194,6 +194,43 @@ TEMPLATES = {
         ("log out", {}),
         ("sign out", {}),
     ],
+    "chat": [
+        ("how are you", {}),
+        ("hey", {}),
+        ("hello", {}),
+        ("hi there", {}),
+        ("good morning", {}),
+        ("good evening", {}),
+        ("what's up", {}),
+        ("talk to me", {}),
+        ("let's chat", {}),
+        ("i'm bored", {}),
+        ("what can you do", {}),
+        ("who are you", {}),
+        ("what are you", {}),
+        ("tell me about {topic}", {"topic": None}),
+        ("what do you think about {topic}", {"topic": None}),
+        ("explain {topic} to me", {"topic": None}),
+        ("what is {topic}", {"topic": None}),
+        ("who is {person}", {"person": None}),
+        ("can you help me understand {topic}", {"topic": None}),
+        ("give me advice on {topic}", {"topic": None}),
+        ("thoughts on {topic}", {"topic": None}),
+        ("help me think through {topic}", {"topic": None}),
+        ("i have a question about {topic}", {"topic": None}),
+        ("what do you know about {topic}", {"topic": None}),
+        ("i need help with {topic}", {"topic": None}),
+        ("can we talk about {topic}", {"topic": None}),
+        ("tell me a joke", {}),
+        ("what's the difference between {topic} and {topic2}", {}),
+        ("how does {topic} work", {"topic": None}),
+        ("why is {topic} important", {"topic": None}),
+        ("summarize {topic}", {"topic": None}),
+        ("pros and cons of {topic}", {"topic": None}),
+        ("any tips on {topic}", {"topic": None}),
+        ("i don't understand {topic}", {"topic": None}),
+        ("what's your opinion on {topic}", {"topic": None}),
+    ],
 }
 
 # Slot fill values for realistic variation
@@ -233,6 +270,19 @@ SLOT_VALUES = {
     "msg": ['"initial commit"', '"fix: hotfix login bug"', '"feat: add registry"'],
     "branch": ["main", "dev", "feature/auth", "hotfix/login"],
     "text": ["hello world", "test string", "project alpha"],
+    "topic": [
+        "machine learning", "python", "neural networks", "APIs", "git",
+        "databases", "docker", "linux", "productivity", "algorithms",
+        "web development", "debugging", "cloud computing", "cybersecurity",
+        "data science", "automation", "open source", "software architecture",
+    ],
+    "topic2": [
+        "deep learning", "javascript", "REST and GraphQL", "SQL and NoSQL",
+        "containers and VMs", "Windows and Linux",
+    ],
+    "person": [
+        "Elon Musk", "Linus Torvalds", "Alan Turing", "Grace Hopper",
+    ],
 }
 
 

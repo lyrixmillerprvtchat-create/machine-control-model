@@ -14,7 +14,7 @@ ALL_INTENTS = [
     "sys_command", "dev_server", "open_app", "file_op_open", "file_op_delete",
     "file_op_create", "dir_op", "browser_open", "browser_search", "system_info",
     "kill_process", "volume_control", "screenshot", "clipboard", "git_op",
-    "sleep_shutdown",
+    "sleep_shutdown", "chat",
 ]
 
 
