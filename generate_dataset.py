@@ -91,8 +91,8 @@ TEMPLATES = {
     ],
     "browser_open": [
         ("open the browser", {}),
-        ("open chrome", {}),
-        ("launch firefox", {}),
+        ("open a web browser", {}),
+        ("launch the browser", {}),
         ("open edge", {}),
         ("open a browser", {}),
         ("go to {url}", {"url": None}),
