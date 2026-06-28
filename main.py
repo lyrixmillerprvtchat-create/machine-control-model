@@ -1,389 +1,251 @@
 """
-Machine Control Model — Main Entry Point
-
-Usage:
-  python main.py --setup          # Phase 1+2: generate dataset & train model
-  python main.py                  # Interactive REPL
-  python main.py "open chrome"    # Single command
-  python main.py --scan /path     # Scan a project directory and register its tools
-  python main.py --train          # Retrain only (dataset must already exist)
+JB — Machine Control Model
+Type what you want done. JB figures it out and does it.
 """
 
 import os
 import re
 import sys
 
+PYTHON  = sys.executable
+PROJECT = os.path.dirname(os.path.abspath(__file__))
+
 try:
     from colorama import init, Fore, Style
     init(autoreset=True)
-    def _c(text, color):
-        colors = {
-            "cyan": Fore.CYAN, "green": Fore.GREEN,
-            "yellow": Fore.YELLOW, "red": Fore.RED, "bold": Style.BRIGHT,
-        }
-        return colors.get(color, "") + text + Style.RESET_ALL
+    def _c(t, c):
+        m = {"cyan": Fore.CYAN, "green": Fore.GREEN, "yellow": Fore.YELLOW,
+             "red": Fore.RED, "bold": Style.BRIGHT, "dim": Style.DIM}
+        return m.get(c, "") + t + Style.RESET_ALL
 except ImportError:
-    def _c(text, _color): return text
+    def _c(t, _): return t
 
-BANNER = r"""
-  __  __  ____  __  __
- |  \/  |/ ___|  \/  |
- | |\/| | |   | |\/| |
- | |  | | |___| |  | |
- |_|  |_|\____|_|  |_|   Machine Control Model v1.2
-"""
-
-_CHAIN_RE = re.compile(
-    r'\s*(?:then|and then|after that|after which|;)\s*',
+# ── multi-task parser ─────────────────────────────────────────────────────────
+# Splits on: then / and then / after that / ; / , (before a verb) / \n
+_SPLIT = re.compile(
+    r'\s*(?:and\s+then|after\s+that|after\s+which|then|;|\n)\s*'
+    r'|,\s*(?=(?:open|launch|start|run|search|go|take|kill|delete|create|show|'
+    r'git|check|close|stop|navigate|make|get|list|push|pull|commit|grab|capture)\b)',
     re.IGNORECASE,
 )
 
+VERBS = re.compile(
+    r'^(?:open|launch|start|run|search|go|take|kill|delete|create|show|git|'
+    r'check|close|stop|navigate|make|get|list|push|pull|commit|grab|capture|'
+    r'explain|tell|what|how|who|why|can|i|help)\b',
+    re.IGNORECASE,
+)
 
-def parse_chain(text: str) -> list[str]:
-    parts = [p.strip() for p in _CHAIN_RE.split(text)]
-    return [p for p in parts if p]
-
-
-def require_model():
-    from matcher_model import MatcherModel, MODEL_PATH
-    if not os.path.exists(MODEL_PATH):
-        print(_c("[!] Model not found. Run: python main.py --setup", "yellow"))
-        sys.exit(1)
-    return MatcherModel()
+def parse_tasks(text: str) -> list[str]:
+    parts = [p.strip() for p in _SPLIT.split(text)]
+    return [p for p in parts if p and len(p) > 1]
 
 
-def setup():
-    print(_c("\n[Phase 1] Generating training dataset...", "cyan"))
-    import generate_dataset
-    generate_dataset.main()
-    print(_c("\n[Phase 2] Training model...", "cyan"))
-    from matcher_model import train
-    train()
-    print(_c("\n[+] Setup complete. Run `python main.py` to start.", "green"))
+# ── model (lazy, loaded once) ─────────────────────────────────────────────────
+_model = None
+
+def get_model():
+    global _model
+    if _model is None:
+        from matcher_model import MatcherModel, MODEL_PATH
+        if not os.path.exists(MODEL_PATH):
+            print(_c("[!] No model found. Run:  jb --setup", "yellow"))
+            sys.exit(1)
+        _model = MatcherModel()
+    return _model
 
 
-# ---------------------------------------------------------------------------
-# Core query runner
-# ---------------------------------------------------------------------------
-
-def run_query(model, query: str, registry=None) -> None:
-    from executor import execute
-    import corrections
+# ── run a batch of tasks ──────────────────────────────────────────────────────
+def run(text: str, registry=None):
     import memory
-    import chat as chat_module
+    import chat as chat_mod
+    from executor import execute
 
-    # Confidence threshold below which we fall back to chat
-    CHAT_FALLBACK_THRESHOLD = 0.40
+    model  = get_model()
+    tasks  = parse_tasks(text)
 
-    steps = parse_chain(query)
-    if len(steps) > 1:
-        print(_c(f"\n[Chain] {len(steps)} steps detected.", "cyan"))
+    if len(tasks) > 1:
+        print(_c(f"\n  {len(tasks)} tasks detected:", "cyan"))
+        for i, t in enumerate(tasks, 1):
+            print(_c(f"  {i}. {t}", "dim"))
+        print()
 
-    for i, step in enumerate(steps, 1):
-        if len(steps) > 1:
-            print(_c(f"\n--- Step {i}/{len(steps)}: {step!r} ---", "bold"))
-
-        # 1. Check memory alias first — skip model entirely
-        prediction = memory.get_alias(step)
-
+    for task in tasks:
+        # memory alias shortcut
+        prediction = memory.get_alias(task)
         if prediction:
-            print(_c(f"  [Memory] Alias matched: '{prediction['_alias_name']}'", "yellow"))
+            print(_c(f"  [{prediction['_alias_name']}]", "yellow"))
         else:
-            # 2. Normal model prediction
-            prediction = model.predict(step)
-            # 3. Fill any missing params from learned preferences
+            prediction = model.predict(task)
             prediction = memory.fill_defaults(prediction)
 
-        intent = prediction.get("intent")
+        intent     = prediction.get("intent")
         confidence = prediction.get("confidence", 1.0)
 
-        # 4. Route to chat if: intent is chat, OR confidence is too low to act on
-        if intent == "chat" or confidence < CHAT_FALLBACK_THRESHOLD:
-            chat_module.chat(step)
-            # No correction prompt for chat — it's conversational
+        # low-confidence or chat intent → phi3
+        if intent == "chat" or confidence < 0.40:
+            chat_mod.chat(task)
             continue
 
-        approved = execute(prediction, registry=registry)
+        # show what we understood (one clean line)
+        conf_color = "green" if confidence > 0.75 else "yellow"
+        print(_c(f"  {intent}", "bold") + "  " + _c(f"{confidence:.0%}", conf_color) +
+              _c(f"  {task}", "dim"))
 
-        # Track usage for auto-learning after every approval
-        if approved:
+        ok = execute(prediction, registry=registry)
+        if ok:
             memory.track_usage(intent, prediction.get("params", {}))
+        print()
 
 
-# ---------------------------------------------------------------------------
-# Memory command handlers (called from REPL before routing to model)
-# ---------------------------------------------------------------------------
-
-def _handle_remember(text: str, model, last_prediction: dict) -> bool:
-    """
-    Handle 'remember X as Y' — saves the most recent prediction under name Y,
-    OR saves a free-text note if no recent prediction is available.
-    Returns True if handled.
-    """
+# ── REPL ──────────────────────────────────────────────────────────────────────
+def repl(registry=None):
     import memory
-    result = memory.parse_remember(text)
-    if result is None:
-        return False
 
-    name, value = result
-
-    # If value looks like a plain phrase (not a known intent), save as note
-    if last_prediction and last_prediction.get("intent"):
-        memory.set_alias(name, last_prediction["intent"], last_prediction.get("params", {}), value)
-        print(_c(f"  [Memory] Saved alias '{name}' -> intent={last_prediction['intent']}", "green"))
-    else:
-        memory.set_note(name, value)
-        print(_c(f"  [Memory] Saved note '{name}' = '{value}'", "green"))
-
-    return True
-
-
-def _handle_forget(text: str) -> bool:
-    import memory
-    name = memory.parse_forget(text)
-    if name is None:
-        return False
-    if memory.forget(name):
-        print(_c(f"  [Memory] Forgot '{name}'", "green"))
-    else:
-        print(_c(f"  [Memory] Nothing found for '{name}'", "yellow"))
-    return True
-
-
-# ---------------------------------------------------------------------------
-# REPL
-# ---------------------------------------------------------------------------
-
-def repl(model, registry=None):
-    import memory
-    import chat as chat_module
-
-    print(_c(BANNER, "cyan"))
-
-    mem_summary = memory.summary()
-    print(_c(f"  Memory loaded: {mem_summary}", "yellow"))
-
-    if chat_module.is_available():
-        active_model = chat_module.best_available_model()
-        hist_summary = chat_module.history_summary()
-        print(_c(f"  Chat online:   {active_model}  |  {hist_summary}", "green"))
-    else:
-        print(_c("  Chat offline:  Ollama not running (type 'chat setup' for instructions)", "red"))
-
-    print(_c("  Type in plain English. Chain steps with 'then'. Type 'help' for commands.\n", "bold"))
-
-    last_prediction: dict = {}
+    print(_c("\n  JB  ready. Type what you want done. 'help' for commands.\n", "bold"))
 
     while True:
         try:
-            query = input(_c("MCM > ", "cyan")).strip()
+            raw = input(_c("jb> ", "cyan")).strip()
         except (KeyboardInterrupt, EOFError):
-            print("\nExiting.")
+            print()
             break
 
-        if not query:
+        if not raw:
             continue
 
-        low = query.lower()
-
-        # ── built-in REPL commands ─────────────────────────────────────────
+        low = raw.lower()
 
         if low in ("exit", "quit", "q"):
-            print("Goodbye.")
             break
 
         if low == "help":
-            print(_c("\n  Commands:", "bold"))
-            print("    tools                    list all registered tools")
-            print("    intents                  list all built-in intent names")
-            print("    history                  show last 20 execution log entries")
-            print("    memories                 show everything in memory")
-            print("    corrections              show saved corrections")
-            print("    retrain                  retrain model with current corrections")
-            print("    remember X as Y          save last command as alias Y")
-            print("    remember Y = <note>      save a free-text note")
-            print("    forget Y                 delete alias or note Y")
-            print("    recall Y                 look up what Y means")
-            print("    clear history            wipe conversation history")
-            print("    chat model <name>        switch local chat model")
-            print("    chat models              list installed Ollama models")
-            print("    chat setup               show Ollama install instructions")
-            print("    exit / quit              exit\n")
+            print(_c("\n  Commands", "bold"))
+            print("  help          this list")
+            print("  memories      show saved aliases, notes, preferences")
+            print("  history       last 20 executed commands")
+            print("  tools         list registered project tools")
+            print("  remember X as Y  save last command as alias Y")
+            print("  forget Y      delete alias or note")
+            print("  recall Y      look up a saved alias or note")
+            print("  clear history wipe conversation history with phi3")
+            print("  chat models   list installed Ollama models")
+            print("  --setup       regenerate dataset and retrain model")
+            print("  exit          quit\n")
             continue
 
-        if low == "tools":
-            if registry:
-                builtins = [t for t in registry.list_tools() if t["builtin"]]
-                projects = [t for t in registry.list_tools() if not t["builtin"]]
-                print(_c(f"\n  Built-in ({len(builtins)}):", "cyan"))
-                for t in builtins:
-                    print(f"    {t['name']:<30} {t['description'][:45]}")
-                if projects:
-                    print(_c(f"\n  Project tools ({len(projects)}):", "cyan"))
-                    for t in projects:
-                        print(f"    {t['name']:<45} {t['description'][:35]}")
-            print()
-            continue
-
-        if low == "intents":
-            import corrections as corr
-            print(_c("\n  Available intents:", "cyan"))
-            for i, intent in enumerate(corr.ALL_INTENTS, 1):
-                print(f"    {i:>2}. {intent}")
+        if low == "memories":
+            import memory as mem
+            d = mem.list_all()
+            if d["aliases"]:
+                print(_c(f"\n  Aliases:", "cyan"))
+                for n, e in d["aliases"].items():
+                    print(f"    {n}  ->  {e['intent']}  {e['params']}")
+            if d["notes"]:
+                print(_c(f"\n  Notes:", "cyan"))
+                for n, v in d["notes"].items():
+                    print(f"    {n}  =  {v}")
+            if d["prefs"]:
+                print(_c(f"\n  Learned:", "cyan"))
+                for k, v in d["prefs"].items():
+                    print(f"    {k}  ->  {v}")
+            if not any(d.values()):
+                print("  Nothing saved yet.")
             print()
             continue
 
         if low == "history":
             from executor import LOG_PATH
             if os.path.exists(LOG_PATH):
-                with open(LOG_PATH, encoding="utf-8") as f:
-                    lines = f.readlines()
-                print(_c(f"\n  Last {min(20, len(lines))} entries:", "cyan"))
+                lines = open(LOG_PATH, encoding="utf-8").readlines()
                 for line in lines[-20:]:
-                    print(f"    {line.rstrip()}")
+                    print(f"  {line.rstrip()}")
             else:
                 print("  No history yet.")
             print()
             continue
 
-        if low == "memories":
-            data = memory.list_all()
-            aliases = data["aliases"]
-            notes = data["notes"]
-            prefs = data["prefs"]
-
-            if aliases:
-                print(_c(f"\n  Aliases ({len(aliases)}):", "cyan"))
-                for name, entry in aliases.items():
-                    print(f"    '{name}'  ->  intent={entry['intent']}  params={entry['params']}")
-            if notes:
-                print(_c(f"\n  Notes ({len(notes)}):", "cyan"))
-                for name, val in notes.items():
-                    print(f"    '{name}'  =  '{val}'")
-            if prefs:
-                print(_c(f"\n  Learned preferences ({len(prefs)}):", "cyan"))
-                for key, val in prefs.items():
-                    print(f"    {key}  ->  '{val}'")
-            if not aliases and not notes and not prefs:
-                print("  Memory is empty. Run commands and say 'remember X as Y'.")
+        if low == "tools":
+            if registry:
+                for t in registry.list_tools():
+                    if not t["builtin"]:
+                        print(f"  {t['name']:<45} {t['description'][:40]}")
             print()
-            continue
-
-        if low.startswith("recall "):
-            name = low[7:].strip()
-            data = memory.list_all()
-            if name in data["aliases"]:
-                e = data["aliases"][name]
-                print(_c(f"\n  '{name}'  ->  intent={e['intent']}  params={e['params']}\n", "cyan"))
-            elif name in data["notes"]:
-                print(_c(f"\n  '{name}'  =  '{data['notes'][name]}'\n", "cyan"))
-            else:
-                print(_c(f"  Nothing found for '{name}'\n", "yellow"))
-            continue
-
-        if low == "corrections":
-            import corrections as corr
-            data = corr.load()
-            if data:
-                print(_c(f"\n  {len(data)} corrections saved:", "cyan"))
-                for c in data:
-                    print(f"    '{c['text']}'  {c['wrong_intent']} -> {c['correct_intent']}")
-            else:
-                print("  No corrections saved yet.")
-            print()
-            continue
-
-        if low == "retrain":
-            import corrections as corr
-            corr.apply_and_retrain()
-            model = require_model()
             continue
 
         if low == "clear history":
-            chat_module.clear_history()
-            continue
-
-        if low == "chat setup":
-            print(chat_module.INSTALL_GUIDE)
+            import chat as cm; cm.clear_history()
             continue
 
         if low == "chat models":
-            models = chat_module.list_models()
-            if models:
-                current = chat_module.get_model()
-                print(_c(f"\n  Installed Ollama models:", "cyan"))
-                for m in models:
-                    marker = " <-- active" if m.startswith(current.split(":")[0]) else ""
-                    print(f"    {m}{marker}")
-            else:
-                print(_c("  No models found. Is Ollama running?", "yellow"))
+            import chat as cm
+            for m in cm.list_models():
+                print(f"  {m}")
             print()
             continue
 
-        if low.startswith("chat model "):
-            name = query[11:].strip()
-            chat_module.set_model(name)
-            print(_c(f"  [Chat] Model set to '{name}'", "green"))
+        if low.startswith("remember "):
+            import memory as mem
+            result = mem.parse_remember(raw)
+            if result:
+                name, value = result
+                mem.set_note(name, value)
+                print(_c(f"  Saved: '{name}'", "green"))
             continue
 
-        # ── memory shortcut commands ───────────────────────────────────────
-
-        if _handle_forget(query):
+        if low.startswith("forget "):
+            import memory as mem
+            name = mem.parse_forget(raw)
+            if name and mem.forget(name):
+                print(_c(f"  Removed: '{name}'", "green"))
             continue
 
-        if _handle_remember(query, model, last_prediction):
+        if low.startswith("recall "):
+            import memory as mem
+            name = low[7:].strip()
+            d = mem.list_all()
+            entry = d["aliases"].get(name) or d["notes"].get(name)
+            print(f"  {entry}" if entry else _c(f"  Nothing for '{name}'", "yellow"))
+            print()
             continue
 
-        # ── normal command routing ─────────────────────────────────────────
-
-        # Capture prediction for 'remember last command as X'
-        steps = parse_chain(query)
-        if len(steps) == 1:
-            alias_hit = memory.get_alias(query)
-            if alias_hit:
-                last_prediction = alias_hit
-            else:
-                last_prediction = model.predict(query)
-
-        run_query(model, query, registry=registry)
+        run(raw, registry=registry)
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
+# ── entry point ───────────────────────────────────────────────────────────────
 def main():
     args = sys.argv[1:]
 
     if "--setup" in args:
-        setup()
+        print(_c("Generating dataset...", "cyan"))
+        import generate_dataset; generate_dataset.main()
+        print(_c("Training model...", "cyan"))
+        from matcher_model import train; train()
+        print(_c("Done. Run: jb", "green"))
+        return
+
+    if "--train" in args:
+        from matcher_model import train; train()
         return
 
     if "--scan" in args:
-        idx = args.index("--scan")
+        idx  = args.index("--scan")
         root = args[idx + 1] if idx + 1 < len(args) else os.getcwd()
         from registry import initialize
         initialize(project_root=root, scan=True)
         return
 
-    if "--train" in args:
-        from matcher_model import train
-        train()
-        return
-
+    # lazy-load registry only once
     from registry import initialize
-    registry = initialize(
-        project_root=os.path.dirname(os.path.abspath(__file__)),
-        scan=False,
-    )
+    registry = initialize(project_root=PROJECT, scan=False)
 
-    model = require_model()
+    # warm model in background so first command is instant
+    get_model()
 
     if args:
-        query = " ".join(args)
-        run_query(model, query, registry=registry)
+        run(" ".join(args), registry=registry)
     else:
-        repl(model, registry)
+        repl(registry=registry)
 
 
 if __name__ == "__main__":
