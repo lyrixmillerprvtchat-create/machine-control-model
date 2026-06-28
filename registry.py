@@ -6,9 +6,11 @@ as tools the local model can route to.
 
 import os
 import ast
+import sys
 import json
+import inspect
 import importlib.util
-from typing import Callable, Optional
+from typing import Callable, Optional, Any
 
 REGISTRY_CACHE = os.path.join(os.path.dirname(__file__), "data", "registry.json")
 
@@ -83,6 +85,7 @@ class ToolRegistry:
                         "description": docstring or f"Function {func_name} in {fname}",
                         "builtin": False,
                         "source": fpath,
+                        "function": func_name,
                     }
                     discovered += 1
         return discovered
@@ -123,6 +126,43 @@ class ToolRegistry:
         for k, v in saved.items():
             if k not in self._tools:
                 self._tools[k] = v
+
+    # ------------------------------------------------------------------
+    # Project function invocation
+    # ------------------------------------------------------------------
+
+    def call_project_tool(self, intent: str, params: dict) -> Any:
+        """
+        Dynamically load the source file for a project:: intent and call
+        the discovered function, injecting matched params as kwargs.
+        """
+        tool = self._tools.get(intent)
+        if not tool or "source" not in tool:
+            raise ValueError(f"No project tool registered for intent: {intent}")
+
+        source_path = tool["source"]
+        func_name = tool["function"]
+
+        spec = importlib.util.spec_from_file_location("_mcm_dynamic_module", source_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        func = getattr(mod, func_name, None)
+        if func is None or not callable(func):
+            raise AttributeError(f"Function '{func_name}' not found in {source_path}")
+
+        # Match params to function signature by name
+        sig = inspect.signature(func)
+        valid_keys = set(sig.parameters.keys())
+        kwargs = {k: v for k, v in params.items() if k in valid_keys and k != "raw_text"}
+
+        return func(**kwargs)
+
+    def get_tool_info(self, intent: str) -> Optional[dict]:
+        return self._tools.get(intent)
+
+    def is_project_tool(self, intent: str) -> bool:
+        return intent.startswith("project::") and intent in self._tools
 
     def __repr__(self) -> str:
         return f"<ToolRegistry tools={len(self._tools)}>"

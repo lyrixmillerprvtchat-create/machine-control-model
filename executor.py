@@ -155,13 +155,39 @@ def _shell(cmd: str) -> None:
         print(_c(f"[!] Exit code {result.returncode}", "yellow"))
 
 
-def execute(prediction: dict) -> bool:
+def execute(prediction: dict, registry=None) -> bool:
     """
     Routes a model prediction to the correct handler.
     Returns True if the action was approved and executed, False if blocked.
     """
     intent = prediction.get("intent", "unknown")
     params = prediction.get("params", {})
+
+    # ------------------------------------------------------------------
+    # Project function invocation (registry:: tools)
+    # ------------------------------------------------------------------
+    if intent.startswith("project::") and registry is not None and registry.is_project_tool(intent):
+        info = registry.get_tool_info(intent)
+        func_name = info.get("function", intent)
+        source = info.get("source", "unknown")
+        desc = info.get("description", "")
+        action = f"Call project function: {func_name}()"
+        command_repr = f"{os.path.basename(source)}::{func_name}({', '.join(f'{k}={v!r}' for k, v in params.items() if k != 'raw_text')})"
+
+        approved = _gatekeeper(prediction, action, command_repr)
+        _log(intent, command_repr, approved)
+        if not approved:
+            return False
+
+        print(_c("\n[+] Executing...", "green"))
+        try:
+            result = registry.call_project_tool(intent, params)
+            if result is not None:
+                print(_c(f"[+] Return value: {result}", "green"))
+        except Exception as exc:
+            print(_c(f"[!] Error calling {func_name}: {exc}", "red"))
+        print(_c("\n[OK] Done.\n", "green"))
+        return True
 
     # ------------------------------------------------------------------
     # Build the action description and command representation
