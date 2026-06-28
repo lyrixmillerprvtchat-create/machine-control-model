@@ -34,6 +34,7 @@ SLOT_PATTERNS = {
     "dir": re.compile(r"([A-Za-z]:\\[\\\w\s\-\.]+|\.{0,2}/[\w\-/\.]+|\bDesktop\b|\bDownloads\b|\bDocuments\b)"),
     "branch": re.compile(r"(?:branch|checkout|switch to)\s+([\w/\-]+)"),
     "process": re.compile(r"(?:kill|stop|terminate|end|close|quit)\s+([\w.]+)"),
+    "app": re.compile(r"(?:open|launch|start|run|fire up|pull up|bring up|get|i need)\s+(?:up\s+)?(.+?)(?:\s+up)?$", re.IGNORECASE),
     "msg": re.compile(r'"([^"]+)"'),
     "query": re.compile(r'(?:search|google|look up|find|bing)\s+(?:for\s+)?(.+)$', re.IGNORECASE),
     "cmd": re.compile(r'(?:run|execute|shell|terminal[:\s]+)\s+(.+)$', re.IGNORECASE),

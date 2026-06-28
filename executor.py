@@ -92,48 +92,46 @@ def _gatekeeper(prediction: dict, action_description: str, command_repr: str) ->
     danger_colors = {"LOW": "green", "MEDIUM": "yellow", "HIGH": "red", "CRITICAL": "red"}
     danger_str = _c(f"[{danger}]", danger_colors[danger])
 
-    print("\n" + _c("=" * 64, "cyan"))
-    print(_c("  MACHINE CONTROL — AWAITING YOUR APPROVAL", "bold"))
-    print(_c("=" * 64, "cyan"))
+    danger_colors = {"LOW": "green", "MEDIUM": "yellow", "HIGH": "red", "CRITICAL": "red"}
+    danger_color  = danger_colors[danger]
 
-    info_lines = [
-        f"Intent    : {prediction.get('intent', 'unknown')}",
-        f"Confidence: {prediction.get('confidence', 0):.1%}",
-        f"Action    : {action_description}",
-        f"Danger    : {danger}",
-        "",
-        f"Command   : {command_repr}",
-    ]
+    print("\n" + _c("=" * 64, "cyan"))
+    print(_c("  MACHINE CONTROL - AWAITING YOUR APPROVAL", "bold"))
+    print(_c("=" * 64, "cyan"))
+    print(f"  Intent    : {_c(prediction.get('intent', 'unknown'), 'bold')}")
+    print(f"  Confidence: {prediction.get('confidence', 0):.0%}")
+    print(f"  Action    : {action_description}")
+    print(f"  Danger    : {_c(danger, danger_color)}")
+    print(f"  Command   : {_c(command_repr, 'yellow')}")
+
     if prediction.get("params"):
         for k, v in prediction["params"].items():
             if k != "raw_text":
-                info_lines.append(f"  param.{k:<8}: {v}")
-
-    for line in info_lines:
-        print(f"  {line}")
-
-    print(_c("=" * 64, "cyan"))
+                print(f"  param.{k:<8}: {v}")
 
     if danger in ("HIGH", "CRITICAL"):
-        print(_c(f"\n  WARNING: This is a {danger}-risk operation.", "red"))
+        print(_c(f"\n  !! WARNING: {danger}-risk operation !!", "red"))
 
     top3 = prediction.get("top3", [])
     if len(top3) > 1:
-        print(f"\n  Other candidates:")
+        print(f"\n  Other guesses:")
         for alt in top3[1:]:
-            print(f"    {alt['intent']:<25} ({alt['score']:.1%})")
+            print(f"    {alt['intent']:<25} ({alt['score']:.0%})")
 
-    print()
+    print(_c("=" * 64, "cyan"))
+    print(_c("  Type  y  to execute   |   anything else to cancel", "bold"))
+    print(_c("=" * 64, "cyan"))
+
     try:
-        answer = input("  Proceed? [y/N] > ").strip().lower()
+        answer = input("  > ").strip().lower()
     except (KeyboardInterrupt, EOFError):
-        print("\n  Aborted.")
+        print("\n  Cancelled.")
         return False
 
     if answer == "y":
         return True
 
-    print(_c("  [BLOCKED] Execution cancelled by user.", "yellow"))
+    print(_c("  [BLOCKED] Cancelled.", "yellow"))
     return False
 
 
