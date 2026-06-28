@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+data/model.joblib
+data/generated/
+data/registry.json
+data/execution.log
+.venv/
+venv/
