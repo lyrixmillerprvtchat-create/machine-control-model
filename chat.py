@@ -26,7 +26,7 @@ except ImportError:
 HISTORY_PATH  = os.path.join(os.path.dirname(__file__), "data", "chat_history.json")
 CONFIG_PATH   = os.path.join(os.path.dirname(__file__), "data", "chat_config.json")
 OLLAMA_BASE   = "http://localhost:11434"
-DEFAULT_MODEL = "llama3.1"
+DEFAULT_MODEL = "phi3"
 MAX_HISTORY   = 40   # messages (20 exchanges)
 
 SYSTEM_PROMPT = (
@@ -220,9 +220,9 @@ INSTALL_GUIDE = """
        ollama serve
 
   Recommended models (pick one based on your RAM):
-    ollama pull llama3.1        # 8B  — needs ~8GB RAM  (recommended)
+    ollama pull phi3            # 3B  — needs ~4GB RAM  (default, fastest)
     ollama pull mistral         # 7B  — needs ~6GB RAM
-    ollama pull phi3            # 3B  — needs ~4GB RAM  (fastest)
+    ollama pull llama3.1        # 8B  — needs ~8GB RAM
 
   Once installed, 'jb' will detect it automatically.
 """
