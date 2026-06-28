@@ -30,10 +30,9 @@ BANNER = r"""
  |  \/  |/ ___|  \/  |
  | |\/| | |   | |\/| |
  | |  | | |___| |  | |
- |_|  |_|\____|_|  |_|   Machine Control Model v1.1
+ |_|  |_|\____|_|  |_|   Machine Control Model v1.2
 """
 
-# Separators that signal a chained multi-step command
 _CHAIN_RE = re.compile(
     r'\s*(?:then|and then|after that|after which|;)\s*',
     re.IGNORECASE,
@@ -41,7 +40,6 @@ _CHAIN_RE = re.compile(
 
 
 def parse_chain(text: str) -> list[str]:
-    """Split a compound command into individual steps."""
     parts = [p.strip() for p in _CHAIN_RE.split(text)]
     return [p for p in parts if p]
 
@@ -58,21 +56,22 @@ def setup():
     print(_c("\n[Phase 1] Generating training dataset...", "cyan"))
     import generate_dataset
     generate_dataset.main()
-
     print(_c("\n[Phase 2] Training model...", "cyan"))
     from matcher_model import train
     train()
-
     print(_c("\n[+] Setup complete. Run `python main.py` to start.", "green"))
 
 
+# ---------------------------------------------------------------------------
+# Core query runner
+# ---------------------------------------------------------------------------
+
 def run_query(model, query: str, registry=None, ask_correction: bool = True) -> None:
-    """Predict, execute, then optionally ask for correction feedback."""
     from executor import execute
     import corrections
+    import memory
 
     steps = parse_chain(query)
-
     if len(steps) > 1:
         print(_c(f"\n[Chain] {len(steps)} steps detected.", "cyan"))
 
@@ -80,17 +79,82 @@ def run_query(model, query: str, registry=None, ask_correction: bool = True) -> 
         if len(steps) > 1:
             print(_c(f"\n--- Step {i}/{len(steps)}: {step!r} ---", "bold"))
 
-        prediction = model.predict(step)
+        # 1. Check memory alias first — skip model entirely
+        prediction = memory.get_alias(step)
+
+        if prediction:
+            print(_c(f"  [Memory] Alias matched: '{prediction['_alias_name']}'", "yellow"))
+        else:
+            # 2. Normal model prediction
+            prediction = model.predict(step)
+            # 3. Fill any missing params from learned preferences
+            prediction = memory.fill_defaults(prediction)
+
         approved = execute(prediction, registry=registry)
 
-        # Correction prompt — only in REPL (not single-shot CLI mode)
+        # 4. Track usage for auto-learning after every approval
+        if approved:
+            memory.track_usage(prediction["intent"], prediction.get("params", {}))
+
+        # 5. Correction prompt (REPL only)
         if ask_correction:
             corrections.prompt_correction(step, prediction["intent"])
 
 
+# ---------------------------------------------------------------------------
+# Memory command handlers (called from REPL before routing to model)
+# ---------------------------------------------------------------------------
+
+def _handle_remember(text: str, model, last_prediction: dict) -> bool:
+    """
+    Handle 'remember X as Y' — saves the most recent prediction under name Y,
+    OR saves a free-text note if no recent prediction is available.
+    Returns True if handled.
+    """
+    import memory
+    result = memory.parse_remember(text)
+    if result is None:
+        return False
+
+    name, value = result
+
+    # If value looks like a plain phrase (not a known intent), save as note
+    if last_prediction and last_prediction.get("intent"):
+        memory.set_alias(name, last_prediction["intent"], last_prediction.get("params", {}), value)
+        print(_c(f"  [Memory] Saved alias '{name}' -> intent={last_prediction['intent']}", "green"))
+    else:
+        memory.set_note(name, value)
+        print(_c(f"  [Memory] Saved note '{name}' = '{value}'", "green"))
+
+    return True
+
+
+def _handle_forget(text: str) -> bool:
+    import memory
+    name = memory.parse_forget(text)
+    if name is None:
+        return False
+    if memory.forget(name):
+        print(_c(f"  [Memory] Forgot '{name}'", "green"))
+    else:
+        print(_c(f"  [Memory] Nothing found for '{name}'", "yellow"))
+    return True
+
+
+# ---------------------------------------------------------------------------
+# REPL
+# ---------------------------------------------------------------------------
+
 def repl(model, registry=None):
+    import memory
+
     print(_c(BANNER, "cyan"))
+
+    mem_summary = memory.summary()
+    print(_c(f"  Memory loaded: {mem_summary}", "yellow"))
     print(_c("  Type in plain English. Chain steps with 'then'. Type 'help' for commands.\n", "bold"))
+
+    last_prediction: dict = {}
 
     while True:
         try:
@@ -104,18 +168,25 @@ def repl(model, registry=None):
 
         low = query.lower()
 
+        # ── built-in REPL commands ─────────────────────────────────────────
+
         if low in ("exit", "quit", "q"):
             print("Goodbye.")
             break
 
         if low == "help":
             print(_c("\n  Commands:", "bold"))
-            print("    tools          — list all registered tools")
-            print("    intents        — list all built-in intent names")
-            print("    history        — show execution log")
-            print("    corrections    — show saved corrections")
-            print("    retrain        — retrain model with current corrections")
-            print("    exit / quit    — exit\n")
+            print("    tools                    list all registered tools")
+            print("    intents                  list all built-in intent names")
+            print("    history                  show last 20 execution log entries")
+            print("    memories                 show everything in memory")
+            print("    corrections              show saved corrections")
+            print("    retrain                  retrain model with current corrections")
+            print("    remember X as Y          save last command as alias Y")
+            print("    remember Y = <note>      save a free-text note")
+            print("    forget Y                 delete alias or note Y")
+            print("    recall Y                 look up what Y means")
+            print("    exit / quit              exit\n")
             continue
 
         if low == "tools":
@@ -153,6 +224,41 @@ def repl(model, registry=None):
             print()
             continue
 
+        if low == "memories":
+            data = memory.list_all()
+            aliases = data["aliases"]
+            notes = data["notes"]
+            prefs = data["prefs"]
+
+            if aliases:
+                print(_c(f"\n  Aliases ({len(aliases)}):", "cyan"))
+                for name, entry in aliases.items():
+                    print(f"    '{name}'  ->  intent={entry['intent']}  params={entry['params']}")
+            if notes:
+                print(_c(f"\n  Notes ({len(notes)}):", "cyan"))
+                for name, val in notes.items():
+                    print(f"    '{name}'  =  '{val}'")
+            if prefs:
+                print(_c(f"\n  Learned preferences ({len(prefs)}):", "cyan"))
+                for key, val in prefs.items():
+                    print(f"    {key}  ->  '{val}'")
+            if not aliases and not notes and not prefs:
+                print("  Memory is empty. Run commands and say 'remember X as Y'.")
+            print()
+            continue
+
+        if low.startswith("recall "):
+            name = low[7:].strip()
+            data = memory.list_all()
+            if name in data["aliases"]:
+                e = data["aliases"][name]
+                print(_c(f"\n  '{name}'  ->  intent={e['intent']}  params={e['params']}\n", "cyan"))
+            elif name in data["notes"]:
+                print(_c(f"\n  '{name}'  =  '{data['notes'][name]}'\n", "cyan"))
+            else:
+                print(_c(f"  Nothing found for '{name}'\n", "yellow"))
+            continue
+
         if low == "corrections":
             import corrections as corr
             data = corr.load()
@@ -168,12 +274,34 @@ def repl(model, registry=None):
         if low == "retrain":
             import corrections as corr
             corr.apply_and_retrain()
-            # Reload the model in-place after retraining
             model = require_model()
             continue
 
+        # ── memory shortcut commands ───────────────────────────────────────
+
+        if _handle_forget(query):
+            continue
+
+        if _handle_remember(query, model, last_prediction):
+            continue
+
+        # ── normal command routing ─────────────────────────────────────────
+
+        # Capture prediction for 'remember last command as X'
+        steps = parse_chain(query)
+        if len(steps) == 1:
+            alias_hit = memory.get_alias(query)
+            if alias_hit:
+                last_prediction = alias_hit
+            else:
+                last_prediction = model.predict(query)
+
         run_query(model, query, registry=registry, ask_correction=True)
 
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 def main():
     args = sys.argv[1:]
